@@ -10,6 +10,7 @@ and extract_visible_text() and gets back simple strings (or None).
 """
 
 import logging
+import threading
 
 import requests
 from bs4 import BeautifulSoup
@@ -60,9 +61,20 @@ def _build_session():
     return session
 
 
-# Built once at import time and reused for every request -- this keeps the
-# underlying TCP connections alive (keep-alive) across sources for speed.
-_SESSION = _build_session()
+# One session per thread, created lazily and reused for every request that
+# thread makes -- this keeps the underlying TCP connections alive
+# (keep-alive) across sources for speed. requests.Session is not guaranteed
+# thread-safe, and skills/scanner.py now scans sources concurrently, so
+# each worker thread gets its own session instead of sharing one.
+_THREAD_LOCAL = threading.local()
+
+
+def _get_session():
+    session = getattr(_THREAD_LOCAL, "session", None)
+    if session is None:
+        session = _build_session()
+        _THREAD_LOCAL.session = session
+    return session
 
 
 def fetch_page(url):
@@ -77,7 +89,7 @@ def fetch_page(url):
               source should never crash the whole scan.
     """
     try:
-        response = _SESSION.get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
+        response = _get_session().get(url, headers=DEFAULT_HEADERS, timeout=REQUEST_TIMEOUT)
         response.raise_for_status()  # raises HTTPError for 4xx/5xx status codes
         return response.text
 
