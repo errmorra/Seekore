@@ -38,6 +38,29 @@ OUTPUT_REPORT_PATH = "output/ioc_report.json"
 
 APP_TITLE = "Seekore -- Threat Intelligence Web Scraper"
 
+# -----------------------------------------------------------------------------
+# Color palette -- a single slate/blue scheme used across every widget so the
+# whole window reads as one designed surface instead of stock ttk gray.
+# (Shades borrowed from Tailwind's "slate" and "blue" scales.)
+# -----------------------------------------------------------------------------
+C_BG = "#eef2f7"          # window background (light slate)
+C_SURFACE = "#ffffff"     # table/card surfaces
+C_STRIPE = "#f1f5f9"      # alternating table rows
+C_BORDER = "#cbd5e1"      # subtle outlines
+C_HEADER = "#0f172a"      # dark banner + log background (slate-900)
+C_HEADER_2 = "#1e293b"    # table headings / summary bar (slate-800)
+C_TEXT = "#0f172a"        # primary text
+C_MUTED = "#64748b"       # secondary text
+C_ON_DARK = "#e2e8f0"     # text on dark surfaces
+C_ON_DARK_MUTED = "#94a3b8"
+C_ACCENT = "#2563eb"      # primary action / selection (blue-600)
+C_ACCENT_DARK = "#1d4ed8"
+C_DANGER = "#dc2626"      # stop button
+C_DANGER_DARK = "#b91c1c"
+C_SUCCESS = "#15803d"
+C_BTN = "#e2e8f0"         # normal button face
+C_BTN_HOVER = "#cbd5e1"
+
 
 # =============================================================================
 # Logging bridge: pipes Python's `logging` output into the GUI's log panel.
@@ -182,21 +205,130 @@ class ThreatIntelGUI:
         # log panel as the single destination for scan activity.
 
     # -------------------------------------------------------------------
-    # Layout construction
+    # Styling: one place that turns stock clam into the app's slate/blue
+    # theme. Everything below is plain ttk styling -- no extra packages.
     # -------------------------------------------------------------------
-    def _build_layout(self):
+    def _setup_styles(self):
         style = ttk.Style()
         try:
             style.theme_use("clam")
         except tk.TclError:
             pass  # fall back to whatever default ttk theme is available
-        style.configure("Accent.TButton", font=("TkDefaultFont", 10, "bold"))
-        # The clam theme's default progressbar fill is nearly the same shade
-        # as its trough -- give it a clearly visible accent color instead.
-        style.configure("Scan.Horizontal.TProgressbar", background="#2563eb")
+
+        self.root.configure(background=C_BG)
+        style.configure(".", background=C_BG, foreground=C_TEXT)
+        style.configure("TFrame", background=C_BG)
+        style.configure("TLabel", background=C_BG, foreground=C_TEXT)
+        style.configure("Muted.TLabel", foreground=C_MUTED)
+
+        # Dark banner across the top of the window.
+        style.configure("Header.TFrame", background=C_HEADER)
+        style.configure(
+            "HeaderTitle.TLabel", background=C_HEADER, foreground="#ffffff", font=("TkDefaultFont", 15, "bold")
+        )
+        style.configure("HeaderSub.TLabel", background=C_HEADER, foreground=C_ON_DARK_MUTED)
+
+        # Sources card.
+        style.configure("TLabelframe", background=C_BG, bordercolor=C_BORDER)
+        style.configure(
+            "TLabelframe.Label", background=C_BG, foreground=C_MUTED, font=("TkDefaultFont", 9, "bold")
+        )
+
+        # Buttons: flat faces with a visible hover state. The primary action
+        # is solid blue; Stop is solid red so it can't be missed mid-scan.
+        style.configure("TButton", background=C_BTN, bordercolor=C_BORDER, padding=(10, 5), relief="flat")
+        style.map("TButton", background=[("disabled", C_BG), ("pressed", C_BORDER), ("active", C_BTN_HOVER)])
+        for name, base, hover in (
+            ("Accent.TButton", C_ACCENT, C_ACCENT_DARK),
+            ("Stop.TButton", C_DANGER, C_DANGER_DARK),
+        ):
+            style.configure(
+                name,
+                background=base,
+                foreground="#ffffff",
+                bordercolor=base,
+                font=("TkDefaultFont", 10, "bold"),
+                padding=(14, 6),
+            )
+            style.map(
+                name,
+                background=[("disabled", C_BTN), ("pressed", hover), ("active", hover)],
+                foreground=[("disabled", C_MUTED)],
+            )
+
+        # Tables: white surface, dark slate headings, blue selection.
+        style.configure(
+            "Treeview",
+            background=C_SURFACE,
+            fieldbackground=C_SURFACE,
+            foreground=C_TEXT,
+            rowheight=26,
+            bordercolor=C_BORDER,
+            borderwidth=1,
+            relief="solid",
+        )
+        style.map("Treeview", background=[("selected", C_ACCENT)], foreground=[("selected", "#ffffff")])
+        style.configure(
+            "Treeview.Heading",
+            background=C_HEADER_2,
+            foreground=C_ON_DARK,
+            relief="flat",
+            padding=(8, 6),
+            font=("TkDefaultFont", 9, "bold"),
+        )
+        style.map("Treeview.Heading", background=[("active", "#334155")])
+
+        # Notebook tabs: quiet when idle, white surface + blue text when selected.
+        style.configure("TNotebook", background=C_BG, borderwidth=0, tabmargins=(2, 4, 2, 0))
+        style.configure(
+            "TNotebook.Tab", background=C_BTN, foreground=C_MUTED, padding=(16, 7), font=("TkDefaultFont", 9, "bold")
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", C_SURFACE), ("active", C_BTN_HOVER)],
+            foreground=[("selected", C_ACCENT)],
+        )
+
+        # Progress bar: thick blue fill on a light trough (clam's default
+        # fill is nearly the same shade as its trough).
+        style.configure(
+            "Scan.Horizontal.TProgressbar",
+            background=C_ACCENT,
+            troughcolor=C_BTN,
+            bordercolor=C_BORDER,
+            lightcolor=C_ACCENT,
+            darkcolor=C_ACCENT,
+            thickness=14,
+        )
+
+        # Bottom summary bar: dark, matching the banner and the log panel.
+        style.configure("Summary.TLabel", background=C_HEADER_2, foreground=C_ON_DARK, padding=(10, 5))
+
+        # Entries/comboboxes on the IOC toolbar.
+        style.configure("TEntry", fieldbackground=C_SURFACE, bordercolor=C_BORDER)
+        style.configure("TCombobox", fieldbackground=C_SURFACE, bordercolor=C_BORDER, arrowcolor=C_TEXT)
+
+    # -------------------------------------------------------------------
+    # Layout construction
+    # -------------------------------------------------------------------
+    def _build_layout(self):
+        self._setup_styles()
+
+        # --- Header banner -------------------------------------------------------
+        header = ttk.Frame(self.root, style="Header.TFrame", padding=(14, 10))
+        header.pack(side="top", fill="x")
+        title_box = ttk.Frame(header, style="Header.TFrame")
+        title_box.pack(side="left")
+        ttk.Label(title_box, text="Seekore", style="HeaderTitle.TLabel").pack(side="left")
+        ttk.Label(
+            title_box, text="   Threat Intelligence Web Scraper", style="HeaderSub.TLabel"
+        ).pack(side="left", padx=(2, 0), pady=(4, 0))
+        ttk.Label(
+            header, text="IPv4 \u00b7 defanged IPs \u00b7 SHA256", style="HeaderSub.TLabel"
+        ).pack(side="right", pady=(4, 0))
 
         # --- Sources panel -----------------------------------------------------
-        sources_frame = ttk.LabelFrame(self.root, text=f"Sources  ({SOURCES_CONFIG_PATH})")
+        sources_frame = ttk.LabelFrame(self.root, text=f"  SOURCES  ({SOURCES_CONFIG_PATH})  ")
         sources_frame.pack(side="top", fill="x", padx=10, pady=(10, 5))
 
         columns = ("name", "url", "active")
@@ -208,6 +340,8 @@ class ThreatIntelGUI:
         self.sources_tree.column("name", width=190)
         self.sources_tree.column("url", width=440)
         self.sources_tree.column("active", width=70, anchor="center")
+        self.sources_tree.tag_configure("stripe", background=C_STRIPE)
+        self.sources_tree.tag_configure("inactive", foreground=C_MUTED)
         self.sources_tree.pack(side="left", fill="both", expand=True, padx=(8, 4), pady=8)
         self.sources_tree.bind("<Double-1>", lambda _e: self._edit_source())
 
@@ -230,7 +364,9 @@ class ThreatIntelGUI:
         )
         self.run_button.pack(side="left")
 
-        self.stop_button = ttk.Button(control_frame, text="\u25a0  Stop", command=self._stop_scan, state="disabled")
+        self.stop_button = ttk.Button(
+            control_frame, text="\u25a0  Stop", style="Stop.TButton", command=self._stop_scan, state="disabled"
+        )
         self.stop_button.pack(side="left", padx=(6, 0))
 
         self.progress = ttk.Progressbar(
@@ -239,7 +375,7 @@ class ThreatIntelGUI:
         self.progress.pack(side="left", padx=10)
 
         self.status_var = tk.StringVar(value="Idle.")
-        ttk.Label(control_frame, textvariable=self.status_var).pack(side="left", padx=6)
+        ttk.Label(control_frame, textvariable=self.status_var, style="Muted.TLabel").pack(side="left", padx=6)
 
         ttk.Button(control_frame, text="Open Output Folder", command=self._open_output_folder).pack(side="right")
 
@@ -248,7 +384,7 @@ class ThreatIntelGUI:
         # lose the space fight when the window shrinks, and the expanding
         # notebook must never squeeze the summary bar out of view.
         self.summary_var = tk.StringVar(value="No scan run yet.")
-        ttk.Label(self.root, textvariable=self.summary_var, relief="sunken", anchor="w", padding=(6, 3)).pack(
+        ttk.Label(self.root, textvariable=self.summary_var, style="Summary.TLabel", anchor="w").pack(
             side="bottom", fill="x"
         )
 
@@ -299,8 +435,9 @@ class ThreatIntelGUI:
         for col in columns:
             self.results_tree.column(col, width=widths[col], anchor="w")
 
-        self.results_tree.tag_configure("success", foreground="#15803d")
-        self.results_tree.tag_configure("failed", foreground="#b91c1c")
+        self.results_tree.tag_configure("stripe", background=C_STRIPE)
+        self.results_tree.tag_configure("success", foreground=C_SUCCESS)
+        self.results_tree.tag_configure("failed", foreground=C_DANGER_DARK)
 
         results_scroll = ttk.Scrollbar(results_tab, command=self.results_tree.yview)
         self.results_tree.configure(yscrollcommand=results_scroll.set)
@@ -346,6 +483,7 @@ class ThreatIntelGUI:
         self.ioc_tree.column("ioc", width=300)
         self.ioc_tree.column("type", width=90, anchor="center")
         self.ioc_tree.column("sources", width=470)
+        self.ioc_tree.tag_configure("stripe", background=C_STRIPE)
 
         ioc_scroll = ttk.Scrollbar(table_frame, command=self.ioc_tree.yview)
         self.ioc_tree.configure(yscrollcommand=ioc_scroll.set)
@@ -392,6 +530,19 @@ class ThreatIntelGUI:
 
         for position, item in enumerate(sorted(tree.get_children(""), key=key, reverse=reverse)):
             tree.move(item, "", position)
+        self._restripe(tree)
+
+    @staticmethod
+    def _restripe(tree):
+        """(Re)apply the alternating row background so zebra striping stays
+        correct after inserts and sorts. The 'stripe' tag only sets a
+        background, so it stacks cleanly with foreground tags like
+        success/failed."""
+        for position, item in enumerate(tree.get_children("")):
+            tags = [t for t in tree.item(item, "tags") if t != "stripe"]
+            if position % 2:
+                tags.append("stripe")
+            tree.item(item, tags=tags)
 
     # -------------------------------------------------------------------
     # Sources CRUD -- all in-memory; nothing touches sources.json until
@@ -427,12 +578,15 @@ class ThreatIntelGUI:
     def _refresh_sources_tree(self):
         self.sources_tree.delete(*self.sources_tree.get_children())
         for idx, src in enumerate(self.sources):
+            active = src.get("active", True)
             self.sources_tree.insert(
                 "",
                 "end",
                 iid=str(idx),
-                values=(src.get("name", ""), src.get("url", ""), "Yes" if src.get("active", True) else "No"),
+                values=(src.get("name", ""), src.get("url", ""), "Yes" if active else "No"),
+                tags=() if active else ("inactive",),
             )
+        self._restripe(self.sources_tree)
 
     def _selected_index(self):
         selection = self.sources_tree.selection()
@@ -600,6 +754,7 @@ class ThreatIntelGUI:
             ),
             tags=(tag,),
         )
+        self._restripe(self.results_tree)
 
     def _on_scan_complete(self, report):
         self.last_report = report
@@ -643,6 +798,7 @@ class ThreatIntelGUI:
                 continue
             self.ioc_tree.insert("", "end", values=(ioc, ioc_type, sources))
             shown += 1
+        self._restripe(self.ioc_tree)
 
         total = len(self.ioc_rows)
         self.ioc_count_var.set(f"{shown} of {total} shown" if total else "")
