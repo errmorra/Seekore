@@ -191,6 +191,9 @@ class ThreatIntelGUI:
         except tk.TclError:
             pass  # fall back to whatever default ttk theme is available
         style.configure("Accent.TButton", font=("TkDefaultFont", 10, "bold"))
+        # The clam theme's default progressbar fill is nearly the same shade
+        # as its trough -- give it a clearly visible accent color instead.
+        style.configure("Scan.Horizontal.TProgressbar", background="#2563eb")
 
         # --- Sources panel -----------------------------------------------------
         sources_frame = ttk.LabelFrame(self.root, text=f"Sources  ({SOURCES_CONFIG_PATH})")
@@ -230,7 +233,9 @@ class ThreatIntelGUI:
         self.stop_button = ttk.Button(control_frame, text="\u25a0  Stop", command=self._stop_scan, state="disabled")
         self.stop_button.pack(side="left", padx=(6, 0))
 
-        self.progress = ttk.Progressbar(control_frame, mode="determinate", length=180)
+        self.progress = ttk.Progressbar(
+            control_frame, mode="determinate", length=180, style="Scan.Horizontal.TProgressbar"
+        )
         self.progress.pack(side="left", padx=10)
 
         self.status_var = tk.StringVar(value="Idle.")
@@ -238,19 +243,23 @@ class ThreatIntelGUI:
 
         ttk.Button(control_frame, text="Open Output Folder", command=self._open_output_folder).pack(side="right")
 
+        # --- Bottom status bar -----------------------------------------------------
+        # Packed BEFORE the notebook on purpose: with pack(), later widgets
+        # lose the space fight when the window shrinks, and the expanding
+        # notebook must never squeeze the summary bar out of view.
+        self.summary_var = tk.StringVar(value="No scan run yet.")
+        ttk.Label(self.root, textvariable=self.summary_var, relief="sunken", anchor="w", padding=(6, 3)).pack(
+            side="bottom", fill="x"
+        )
+
         # --- Tabbed output area: Log / Results / IOC map --------------------------
         notebook = ttk.Notebook(self.root)
+        notebook.enable_traversal()  # Ctrl+(Shift+)Tab switches tabs from the keyboard
         notebook.pack(side="top", fill="both", expand=True, padx=10, pady=(5, 0))
 
         self._build_log_tab(notebook)
         self._build_results_tab(notebook)
         self._build_ioc_tab(notebook)
-
-        # --- Bottom status bar -----------------------------------------------------
-        self.summary_var = tk.StringVar(value="No scan run yet.")
-        ttk.Label(self.root, textvariable=self.summary_var, relief="sunken", anchor="w", padding=(6, 3)).pack(
-            side="bottom", fill="x"
-        )
 
     def _build_log_tab(self, notebook):
         log_tab = ttk.Frame(notebook)
