@@ -21,9 +21,26 @@ import re
 _OCTET = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
 
 # ---------------------------------------------------------------------------
+# Guards shared by the IP patterns below, so a version string like
+# "1.2.3.4.5" doesn't yield a bogus "1.2.3.4" (or "2.3.4.5") match:
+#   - lookbehind: the match may not be directly preceded by a "." (which
+#     would mean we started in the middle of a longer dotted sequence).
+#   - lookahead:  the match may not be directly followed by ".<digit>"
+#     (a fifth octet). A plain sentence-ending "." is still fine.
+# ---------------------------------------------------------------------------
+_NOT_PART_OF_LONGER_SEQ_BEFORE = r"(?<!\.)"
+_NOT_PART_OF_LONGER_SEQ_AFTER = r"(?!\.?\d)"
+
+# ---------------------------------------------------------------------------
 # 1) Standard IPv4 address: four octets joined by literal dots.
 # ---------------------------------------------------------------------------
-IPV4_PATTERN = re.compile(r"\b" + r"\.".join([_OCTET] * 4) + r"\b")
+IPV4_PATTERN = re.compile(
+    _NOT_PART_OF_LONGER_SEQ_BEFORE
+    + r"\b"
+    + r"\.".join([_OCTET] * 4)
+    + r"\b"
+    + _NOT_PART_OF_LONGER_SEQ_AFTER
+)
 
 # ---------------------------------------------------------------------------
 # 2) SHA256 hash: exactly 64 hex characters, word-boundary bounded so it
@@ -39,17 +56,24 @@ SHA256_PATTERN = re.compile(r"\b[a-fA-F0-9]{64}\b")
 # for the "." separator include:
 #     [.]     e.g. 192[.]168[.]1[.]1
 #     (.)     e.g. 192(.)168(.)1(.)1
+#     {.}     e.g. 192{.}168{.}1{.}1
 #     [dot]   e.g. 192[dot]168[dot]1[dot]1
+#     (dot)   e.g. 192(dot)168(dot)1(dot)1
 #
 # Real-world write-ups often only defang ONE octet of an address (e.g.
 # "192.168.1[.]1" or "192[.]168.1.1"), so each of the three separators in
 # the pattern is independently allowed to be EITHER a defanged style OR a
 # plain "." -- that's what lets partially-defanged IOCs match in full.
 # ---------------------------------------------------------------------------
-_DEFANGED_SEP = r"(?:\[\.\]|\(\.\)|\[dot\]|\.)"
+_DEFANGED_SEP = r"(?:\[\.\]|\(\.\)|\{\.\}|\[dot\]|\(dot\)|\.)"
 
 DEFANGED_IP_PATTERN = re.compile(
-    r"\b" + _OCTET + (_DEFANGED_SEP + _OCTET) * 3 + r"\b",
+    _NOT_PART_OF_LONGER_SEQ_BEFORE
+    + r"\b"
+    + _OCTET
+    + (_DEFANGED_SEP + _OCTET) * 3
+    + r"\b"
+    + _NOT_PART_OF_LONGER_SEQ_AFTER,
     re.IGNORECASE,
 )
 
@@ -67,7 +91,7 @@ def extract_sha256_hashes(text):
 def extract_defanged_ips(text):
     """
     Return every IP-like string in `text` that contains at least one
-    defanged separator ([.], (.), or [dot]).
+    defanged separator ([.], (.), {.}, [dot], or (dot)).
 
     Matches that turn out to be FULLY plain (e.g. "192.168.1.1", which the
     pattern above can also match because "." is one of the allowed
@@ -78,7 +102,7 @@ def extract_defanged_ips(text):
     defanged_matches = []
     for match in DEFANGED_IP_PATTERN.finditer(text):
         candidate = match.group(0)
-        if "[" in candidate or "(" in candidate:
+        if "[" in candidate or "(" in candidate or "{" in candidate:
             defanged_matches.append(candidate)
     return defanged_matches
 
@@ -90,10 +114,12 @@ def refang_ip(defanged_ip):
     Examples:
         "192[.]168[.]1[.]1"  -> "192.168.1.1"
         "192(.)168(.)1(.)1"  -> "192.168.1.1"
+        "192{.}168{.}1{.}1"  -> "192.168.1.1"
         "192[dot]168.1[.]1"  -> "192.168.1.1"
     """
     refanged = defanged_ip
     refanged = refanged.replace("[.]", ".")
     refanged = refanged.replace("(.)", ".")
-    refanged = re.sub(r"\[dot\]", ".", refanged, flags=re.IGNORECASE)
+    refanged = refanged.replace("{.}", ".")
+    refanged = re.sub(r"\[dot\]|\(dot\)", ".", refanged, flags=re.IGNORECASE)
     return refanged

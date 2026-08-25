@@ -13,6 +13,7 @@ avoids both problems.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from skills.regex_parser import (
@@ -114,32 +115,79 @@ def build_ioc_mapping(results_by_source):
     return ioc_to_source_mapping
 
 
-def run_full_scan(active_sources, total_configured):
+def run_full_scan(active_sources, total_configured, max_workers=5, progress_callback=None, cancel_event=None):
     """
     Run process_source() over every active source and assemble the final
     report dict (metadata + per-source results + IOC reverse index).
+
+    Sources are fetched CONCURRENTLY (up to `max_workers` at a time) --
+    scraping is almost entirely network-bound waiting, so scanning several
+    slow blogs in parallel cuts total wall-clock time dramatically without
+    hammering any single site (each individual source still gets exactly
+    one polite request).
+
+    Optional hooks (both used by gui.py, both safe to omit from the CLI):
+        progress_callback(completed_count, total_count, url, result)
+            Called from worker threads as each source finishes. Callers
+            that update a UI must marshal this onto their UI thread
+            themselves (the GUI does this via a queue).
+        cancel_event (threading.Event)
+            If set mid-scan, sources that haven't started yet are skipped
+            (in-flight requests still finish). Skipped sources are simply
+            absent from the report, and scan_metadata["cancelled"] is True.
 
     This does NOT write the report to disk -- callers (main.py, gui.py)
     decide when/whether to persist it, which keeps this function usable
     in contexts (like a future "dry run" mode) that don't want a file
     written at all.
     """
+    total = len(active_sources)
+    # Pre-seed with None per source position so the final report preserves
+    # the configured source order even though completion order is arbitrary.
+    results_by_position = [None] * total
+    completed = 0
+
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, total))) as executor:
+        future_to_position = {}
+        for position, source in enumerate(active_sources):
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            future_to_position[executor.submit(process_source, source)] = position
+
+        for future in as_completed(future_to_position):
+            position = future_to_position[future]
+            url, result = future.result()
+            results_by_position[position] = (url, result)
+            completed += 1
+            if progress_callback is not None:
+                progress_callback(completed, total, url, result)
+
     results_by_source = {}
-    for source in active_sources:
-        url, result = process_source(source)
-        results_by_source[url] = result
+    for entry in results_by_position:
+        if entry is not None:
+            url, result = entry
+            results_by_source[url] = result
 
     ioc_to_source_mapping = build_ioc_mapping(results_by_source)
     successful = sum(1 for r in results_by_source.values() if r["status"] == "success")
+    scanned = len(results_by_source)
+    unique_ips = set()
+    unique_hashes = set()
+    for r in results_by_source.values():
+        unique_ips.update(r["ipv4_addresses"])
+        unique_hashes.update(r["sha256_hashes"])
 
     report = {
         "scan_metadata": {
             "scan_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "total_sources_configured": total_configured,
-            "total_sources_scanned": len(active_sources),
+            "total_sources_scanned": scanned,
             "sources_succeeded": successful,
-            "sources_failed": len(active_sources) - successful,
+            "sources_failed": scanned - successful,
             "total_unique_iocs": len(ioc_to_source_mapping),
+            "total_unique_ipv4": len(unique_ips),
+            "total_unique_sha256": len(unique_hashes),
+            "cancelled": bool(cancel_event is not None and cancel_event.is_set()),
         },
         "results_by_source": results_by_source,
         "ioc_to_source_mapping": ioc_to_source_mapping,

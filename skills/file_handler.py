@@ -57,6 +57,20 @@ def load_sources(config_path):
     return sources
 
 
+def save_sources(sources, config_path):
+    """
+    Write the list of source dicts back to `config_path` in the same
+    {"sources": [...]} format that load_sources() reads.
+
+    Used by the GUI's "Save to disk" action so the on-disk format is
+    defined in exactly one place (here, next to load_sources).
+    """
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump({"sources": sources}, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    logger.info(f"Sources config written: {config_path} ({len(sources)} source(s))")
+
+
 def ensure_output_dir(dir_path):
     """Create `dir_path` (and any missing parent directories) if needed."""
     if dir_path:

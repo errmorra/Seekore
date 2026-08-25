@@ -19,6 +19,10 @@ freshly published indicators.
 - **Two front-ends, one shared engine** — a desktop GUI (`gui.py`) for
   point-and-click use, and a CLI (`main.py`) for scripting/cron. Both call
   the exact same `skills/scanner.py` logic, so they never behave differently.
+- **Concurrent scanning** — sources are fetched in parallel (up to 5 at a
+  time, one polite request per source), so a full run takes roughly as long
+  as the *slowest* source instead of the *sum* of all of them. Scans can
+  also be cancelled mid-run (the GUI's **Stop** button).
 - **Bot-resistant fetching** — sends realistic browser headers (User-Agent,
   Accept, Accept-Language) so requests aren't trivially blocked, plus
   automatic retries with backoff for transient server errors.
@@ -29,7 +33,9 @@ freshly published indicators.
   - SHA256 hashes (64 hex characters)
   - **Defanged IPv4 addresses**, including partially-defanged and mixed
     styles: `192[.]168.1.1`, `192.168.1[.]1`, `192(.)168(.)1(.)1`,
-    `192[dot]168[dot]1[dot]1`
+    `192{.}168{.}1{.}1`, `192[dot]168[dot]1[dot]1`, `192(dot)168(dot)1(dot)1`
+  - Longer dotted sequences (e.g. the version string `1.2.3.4.5`) are
+    **not** mis-detected as IPv4 addresses.
 - **Automatic refanging** — defanged IPs are converted back to standard
   dotted-decimal form and merged with plain IPs, so the same underlying
   address is never counted (or reported) twice.
@@ -59,7 +65,10 @@ Seekore/
 │   ├── web_scraper.py       # HTTP fetching (headers, retries, error handling) + HTML-to-text.
 │   ├── regex_parser.py      # IOC regex patterns: IPv4, SHA256, defanged IPs, and the refang() function.
 │   ├── scanner.py           # Shared scan engine: process_source() + run_full_scan(). Used by BOTH main.py and gui.py.
-│   └── file_handler.py      # Reads sources.json, writes the JSON report.
+│   └── file_handler.py      # Reads/writes sources.json, writes the JSON report.
+├── tests/
+│   ├── test_regex_parser.py # Unit tests for the IOC extraction patterns.
+│   └── test_scanner.py      # Unit tests for the scan engine (network mocked out).
 └── output/
     └── ioc_report.json      # Generated automatically after each run (CLI or GUI).
 ```
@@ -165,27 +174,42 @@ This opens a desktop window with three parts:
 A live, editable view of `sources.json`. Select a row and click **Edit...**
 or double-click it to change the name/URL/active flag; use **Add...** to
 create a new one, **Remove** to delete one, or **Toggle Active** to quickly
-enable/disable it. Changes are held in memory until you click
-**Save to disk** — so you can experiment freely and only commit when ready.
-**Reload from disk** discards unsaved changes and re-reads `sources.json`.
+enable/disable it. URLs entered without a scheme are automatically given
+`https://`, and adding a URL that's already configured asks for
+confirmation first. Changes are held in memory until you click
+**Save to disk** (or press **Ctrl+S**) — the window title shows
+`[unsaved changes]` until you do, and closing the window with unsaved
+changes prompts you to save them. **Reload from disk** discards unsaved
+changes (after confirming) and re-reads `sources.json`.
 
 **2. Scan controls (middle)**
-Click **▶ Run Scan** to scrape every currently-active source. The button
-disables and the progress bar animates while the scan runs on a background
-thread, so the window stays responsive even on slow or hanging sites. A
-status bar at the very bottom summarizes the last completed run (sources
-succeeded/failed, total unique IOCs, and the report path). **Open Output
-Folder** opens `output/` in your OS's file browser.
+Click **▶ Run Scan** (or press **F5**) to scrape every currently-active
+source. Sources are fetched concurrently on background threads, so the
+window stays responsive even on slow or hanging sites; the progress bar
+fills as each source finishes and result rows appear live, one per
+completed source. **■ Stop** cancels the rest of a running scan (requests
+already in flight finish first). A status bar at the very bottom
+summarizes the last completed run (sources succeeded/failed, unique IOCs
+by type, and the report path). **Open Output Folder** opens `output/` in
+your OS's file browser.
 
 **3. Results tabs (bottom)**
 - **Live Log** — the same timestamped log lines you'd see in the terminal
-  running `main.py`, streamed in live as the scan progresses.
+  running `main.py`, streamed in live as the scan progresses. WARNING
+  lines are highlighted yellow and ERROR lines red, so failures stand out.
 - **Results by Source** — one row per scanned source, color-coded green
   (success) or red (failed), with counts of IPv4s/hashes found and the
   error message for any source that failed.
 - **IOC → Source Mapping** — one row per unique indicator, its type
   (IPv4/SHA256), and every source URL it was found on — the same reverse
-  index that's saved in `ioc_report.json`.
+  index that's saved in `ioc_report.json`. The toolbar above the table
+  lets you **search** indicators/sources as you type, filter by **type**,
+  **copy** selected indicators to the clipboard (also right-click or
+  Ctrl+C), and **export** the currently filtered rows to CSV or a plain
+  text list.
+
+Every column header in all three tables is clickable to sort (click again
+to reverse).
 
 Every scan run from the GUI writes the same `output/ioc_report.json` file
 that `main.py` produces — the GUI is just a different way to trigger and
@@ -203,7 +227,10 @@ view the exact same underlying scan (see `skills/scanner.py`).
         "total_sources_scanned": 3,
         "sources_succeeded": 2,
         "sources_failed": 1,
-        "total_unique_iocs": 6
+        "total_unique_iocs": 6,
+        "total_unique_ipv4": 5,
+        "total_unique_sha256": 1,
+        "cancelled": false
     },
     "results_by_source": {
         "https://thehackernews.com/": {
@@ -241,9 +268,9 @@ view the exact same underlying scan (see `skills/scanner.py`).
 
 | IOC Type          | Pattern Summary                                                                 |
 |--------------------|----------------------------------------------------------------------------------|
-| IPv4               | Four dot-separated octets, each validated to the 0–255 range.                    |
+| IPv4               | Four dot-separated octets, each validated to the 0–255 range. Guarded so longer dotted sequences (e.g. the version string `1.2.3.4.5`) don't produce a bogus match. |
 | SHA256             | Exactly 64 hexadecimal characters, bounded so it can't match inside a longer hex string (e.g. a SHA512 hash won't false-positive). |
-| Defanged IPv4      | Same octet validation, but separators may be `.`, `[.]`, `(.)`, or `[dot]` — independently per position, so partially-defanged addresses like `192.168.1[.]1` are still matched in full. |
+| Defanged IPv4      | Same octet validation, but separators may be `.`, `[.]`, `(.)`, `{.}`, `[dot]`, or `(dot)` — independently per position, so partially-defanged addresses like `192.168.1[.]1` are still matched in full. |
 
 After extraction, `refang_ip()` normalizes any defanged match back to
 standard dotted form (`192[.]168[.]1[.]1` → `192.168.1.1`), and the result
@@ -291,12 +318,26 @@ needed in `web_scraper.py` or `file_handler.py` for this kind of extension.
 
 - Only scrape sites you're authorized to access, and respect each site's
   `robots.txt` and Terms of Service.
-- This tool makes one polite, sequential request per configured source —
-  it is not built for aggressive or high-volume crawling. If you scale it
-  up, add rate limiting between requests.
+- This tool makes exactly one polite request per configured source (a few
+  different sites are fetched in parallel, but no single site is ever hit
+  more than once per run) — it is not built for aggressive or high-volume
+  crawling. If you scale it up, add rate limiting between requests.
 - Intended for aggregating **publicly published** threat write-ups for
   defensive purposes (blocklisting, enrichment, correlation) — not for
   bypassing paywalls or access controls.
+
+---
+
+## Running the Tests
+
+The `tests/` directory contains a unit-test suite for the IOC extraction
+patterns and the scan engine. All network I/O is mocked, so the tests run
+offline in well under a second and need nothing beyond the standard
+library:
+
+```bash
+python3 -m unittest discover tests -v
+```
 
 ---
 
