@@ -1,5 +1,7 @@
 # Seekore
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Seekore** is a lightweight, modular Python tool that scrapes security
 blogs and threat reports for **Indicators of Compromise (IOCs)** — IPv4
 addresses (including "defanged" ones like `192[.]168.1.1`) and SHA256
@@ -305,3 +307,9 @@ To confirm your setup works without waiting on live sites, you can point
 `output/ioc_report.json` is created with a `"status": "success"` entry.
 A `"status": "failed"` entry with a clear `error` message means the
 network path or target site is the issue — not the scraper's parsing logic.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE) for the full text. Use it, modify it, ship it.
