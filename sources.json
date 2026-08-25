@@ -1,0 +1,24 @@
+{
+  "sources": [
+    {
+      "name": "The Hacker News",
+      "url": "https://thehackernews.com/",
+      "active": true
+    },
+    {
+      "name": "BleepingComputer - Security",
+      "url": "https://www.bleepingcomputer.com/news/security/",
+      "active": true
+    },
+    {
+      "name": "Krebs on Security",
+      "url": "https://krebsonsecurity.com/",
+      "active": true
+    },
+    {
+      "name": "Dark Reading",
+      "url": "https://www.darkreading.com/threat-intelligence",
+      "active": false
+    }
+  ]
+}
